@@ -16,7 +16,7 @@ int nextpid = 1;
 struct spinlock pid_lock;
 
 extern void forkret(void);
-static void freeproc(struct proc *p);
+void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
@@ -106,7 +106,7 @@ allocpid()
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
-static struct proc*
+extern struct proc*
 allocproc(void)
 {
   struct proc *p;
@@ -145,6 +145,8 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  // Initialize exit message to empty string
+  memset(p->exit_msg, 0, sizeof(p->exit_msg));
 
   return p;
 }
@@ -152,7 +154,7 @@ found:
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
-static void
+void
 freeproc(struct proc *p)
 {
   if(p->trapframe)
@@ -388,7 +390,7 @@ exit(int status)
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
-wait(uint64 addr)
+wait(uint64 addr, uint64 msg_addr)
 {
   struct proc *pp;
   int havekids, pid;
@@ -413,6 +415,13 @@ wait(uint64 addr)
             release(&pp->lock);
             release(&wait_lock);
             return -1;
+          }
+
+          if(msg_addr != 0 && copyout(p->pagetable, msg_addr, pp->exit_msg,
+            sizeof(pp->exit_msg)) < 0) {
+              release(&pp->lock);
+              release(&wait_lock);
+              return -1;
           }
           freeproc(pp);
           release(&pp->lock);
@@ -680,4 +689,135 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int
+forkn_user(int n, uint64 pids_uaddr, pagetable_t pagetable)
+{
+  if (n < 1 || n > 16)
+    return -1;
+  struct proc *parent = myproc();
+  struct proc *children[n];
+  int pids[n];
+  int created = 0;
+  printf("forkn_user: Creating %d child processes (parent pid=%d)\n", n, parent->pid);
+
+  for (int i = 0; i < n; i++) {
+    printf("forkn_user: Starting creation of child %d\n", i + 1);
+    struct proc *np = allocproc();
+    if (np == 0) {
+      printf("forkn_user: Failed to allocate process %d\n", i + 1);
+      goto fail;
+    }
+    printf("forkn_user: Process %d allocated with PID %d\n", i + 1, np->pid);
+    // Copy user memory from parent to child
+    if (uvmcopy(parent->pagetable, np->pagetable, parent->sz) != 0) {
+      printf("forkn_user: uvmcopy failed for child %d\n", i + 1);
+      freeproc(np);
+      release(&np->lock);
+      goto fail;
+    }
+    np->sz = parent->sz;
+    // Copy saved user registers
+    *(np->trapframe) = *(parent->trapframe);
+    // Set return value for child
+    np->trapframe->a0 = i + 1;
+    // Copy file descriptors
+    for (int fd = 0; fd < NOFILE; fd++) {
+      if (parent->ofile[fd]) {
+        np->ofile[fd] = filedup(parent->ofile[fd]);
+      }
+    }
+    // Copy current directory
+    np->cwd = idup(parent->cwd);
+    // Copy process name
+    safestrcpy(np->name, parent->name, sizeof(parent->name));
+    // Record PID for return to user
+    pids[i] = np->pid;
+    // Set parent relationship
+    acquire(&wait_lock);
+    np->parent = parent;
+    release(&wait_lock);
+    // Store child for cleanup in case of failure
+    children[created++] = np;
+    printf("forkn_user: Child %d (PID=%d) setup complete before setting state\n", i + 1, np->pid);
+    // Keep child in memory but don't mark as RUNNABLE yet
+    // Release lock acquired by allocproc
+    release(&np->lock);
+    printf("forkn_user: Lock released for child %d (PID=%d)\n", i + 1, np->pid);
+  }
+  printf("forkn_user: Finished creating children, about to copyout PIDs\n");
+  // Copy PIDs to user space
+  if (copyout(pagetable, pids_uaddr, (char *)pids, sizeof(int) * n) < 0) {
+    printf("forkn_user: copyout failed for pids\n");
+    goto fail;
+  }
+  printf("forkn_user: Successfully copied out PIDs\n");
+  // Make all children RUNNABLE
+  for (int i = 0; i < created; i++) {
+    acquire(&children[i]->lock);
+    children[i]->state = RUNNABLE;
+    release(&children[i]->lock);
+    printf("forkn_user: Child %d (PID=%d) now RUNNABLE\n", i + 1, children[i]->pid);
+  }
+  
+  return 0;  
+
+fail:
+  for (int j = 0; j < created; j++) {
+    acquire(&children[j]->lock);
+    freeproc(children[j]);
+    release(&children[j]->lock);
+  }
+  return -1;
+}
+
+
+int 
+waitall_user(uint64 n_uaddr, uint64 statuses_uaddr, pagetable_t pagetable)
+{
+    struct proc *p;
+    struct proc *curproc = myproc();
+    int statuses[NPROC];
+    int count = 0;
+    acquire(&wait_lock);
+
+    for (;;) {
+        int havekids = 0;
+        int did_wait = 0;
+        printf("waitall_user: Checking for child processes to wait on\n");
+        for (p = proc; p < &proc[NPROC]; p++) {
+            if (p->parent != curproc)
+                continue;
+            acquire(&p->lock);
+            havekids = 1;
+            printf("waitall_user: Found child process with PID=%d, state=%d\n", p->pid, p->state);
+
+            if (p->state == ZOMBIE) {
+                statuses[count++] = p->xstate;
+                freeproc(p);
+                release(&p->lock);
+                did_wait = 1;
+            } else {
+                release(&p->lock);
+            }
+        }
+        if (did_wait) {
+            // Try again 
+            continue;
+        }
+        if (!havekids) {
+            release(&wait_lock);
+            // Copy out only after releasing lock
+            if (copyout(pagetable, n_uaddr, (char*)&count, sizeof(int)) < 0)
+                return -1;
+            if (copyout(pagetable, statuses_uaddr, (char*)statuses, count * sizeof(int)) < 0)
+                return -1;
+            return 0;
+        }
+
+        // Wait for children to exit
+        printf("waitall_user: Sleeping, waiting for children to exit...\n");
+        sleep(curproc, &wait_lock);
+    }
 }

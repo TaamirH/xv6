@@ -4,13 +4,17 @@
 #include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
-#include "proc.h"
+#include "../kernel/proc.h"
 
 uint64
 sys_exit(void)
 {
   int n;
+  char exit_msg[32];
   argint(0, &n);
+  argstr(1, exit_msg, sizeof(exit_msg));
+  struct proc *p = myproc();
+  safestrcpy(p->exit_msg, exit_msg, sizeof(p->exit_msg));
   exit(n);
   return 0;  // not reached
 }
@@ -28,11 +32,14 @@ sys_fork(void)
 }
 
 uint64
-sys_wait(void)
-{
-  uint64 p;
-  argaddr(0, &p);
-  return wait(p);
+sys_wait(void){
+  uint64 addr;
+  uint64 msg_addr;
+  
+  argaddr(0, &addr);
+  argaddr(1, &msg_addr);
+  
+  return wait(addr, msg_addr);
 }
 
 uint64
@@ -88,4 +95,29 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64 sys_memsize(void)
+{
+  struct proc *p = myproc();
+  return p->sz;
+}
+uint64
+sys_forkn(void)
+{
+    struct proc *p = myproc();
+    int n = p->trapframe->a0;
+    uint64 pids_uaddr = p->trapframe->a1;
+    // Call the helper function from proc.c
+    return forkn_user(n, pids_uaddr, p->pagetable);
+}
+
+uint64
+sys_waitall(void)
+{
+    struct proc *p = myproc();
+    uint64 n_uaddr = p->trapframe->a0;
+    uint64 statuses_uaddr = p->trapframe->a1;
+    // Call the helper function from proc.c
+    return waitall_user(n_uaddr, statuses_uaddr, p->pagetable);
 }

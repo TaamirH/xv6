@@ -80,7 +80,6 @@ struct trapframe {
 };
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
-
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -103,5 +102,8 @@ struct proc {
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
-  char name[16];               // Process name (debugging)
+  char name[16];      // Process name (debugging
+  char exit_msg[32];          // Exit message
 };
+int forkn_user(int n, uint64 pids_uaddr, pagetable_t pagetable);
+int waitall_user(uint64 n_uaddr, uint64 statuses_uaddr, pagetable_t pagetable);
