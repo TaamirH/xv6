@@ -25,6 +25,13 @@ int uptime(void);
 int memsize(void);
 int forkn(int n, int* pids);   
 int waitall(int* n, int* statuses); 
+int peterson_create(void);
+int peterson_acquire(int lock_id, int role);
+int peterson_release(int lock_id, int role);
+int peterson_destroy(int lock_id);
+int tournament_create(int processes);
+int tournament_acquire(void);
+int tournament_release(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

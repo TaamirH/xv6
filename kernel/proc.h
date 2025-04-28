@@ -107,3 +107,9 @@ struct proc {
 };
 int forkn_user(int n, uint64 pids_uaddr, pagetable_t pagetable);
 int waitall_user(uint64 n_uaddr, uint64 statuses_uaddr, pagetable_t pagetable);
+
+struct petersonlock {
+  int active;            // Is the lock initialized/active?
+  int flag[2];           // Flag for each process
+  int turn;              // Whose turn is it
+};

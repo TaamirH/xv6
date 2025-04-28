@@ -39,3 +39,7 @@ entry("uptime");
 entry ("memsize");
 entry("waitall");
 entry("forkn");
+entry("peterson_create");
+entry("peterson_acquire");
+entry("peterson_release");
+entry("peterson_destroy");

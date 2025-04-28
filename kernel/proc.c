@@ -5,7 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
-
+struct petersonlock petersonlocks[NPETERSON];
+struct spinlock petersonlock;
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -820,4 +821,17 @@ waitall_user(uint64 n_uaddr, uint64 statuses_uaddr, pagetable_t pagetable)
         printf("waitall_user: Sleeping, waiting for children to exit...\n");
         sleep(curproc, &wait_lock);
     }
+}
+
+
+void
+petersoninit(void)
+{
+  initlock(&petersonlock, "petersonlocks");
+  for(int i = 0; i < NPETERSON; i++) {
+    petersonlocks[i].active = 0;
+    petersonlocks[i].flag[0] = 0;
+    petersonlocks[i].flag[1] = 0;
+    petersonlocks[i].turn = 0;
+  }
 }
